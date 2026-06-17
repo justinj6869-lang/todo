@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="theme-color" content="#1d9e75" />
+<title>To-Do</title>
+<style>
+  :root{
+    --bg:#f7f6f2; --card:#ffffff; --ink:#23221f; --muted:#76746c; --line:#e7e5dd;
+    --accent:#1d9e75; --accent-bg:#e1f5ee; --done:#9a988f;
+    --sched:#ba7517; --sched-bg:#faeeda; --danger:#a32d2d;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#1b1b19; --card:#242421; --ink:#ecebe4; --muted:#a3a199; --line:#34332e;
+      --accent:#5dcaa5; --accent-bg:#0f3a2f; --done:#6f6e68; --sched:#ef9f27; --sched-bg:#3a2a0e; --danger:#f09595; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.5;padding:24px 16px;-webkit-text-size-adjust:100%;}
+  .wrap{max-width:640px;margin:0 auto;}
+  .back{display:inline-block;font-size:13px;color:var(--muted);text-decoration:none;margin-bottom:10px;}
+  .back:hover{color:var(--accent);}
+  h1{font-size:22px;font-weight:600;margin:0 0 2px;}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 14px;}
+  .status{font-size:12px;margin:0 0 12px;display:flex;align-items:center;gap:7px;min-height:18px;}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--muted);flex:0 0 9px;}
+  .status.ok .dot{background:var(--accent);} .status.saving .dot{background:var(--sched);}
+  .status.err{color:var(--danger);} .status.err .dot{background:var(--danger);}
+  .bar{height:10px;background:var(--line);border-radius:99px;overflow:hidden;margin:6px 0 4px;}
+  .bar>span{display:block;height:100%;background:var(--accent);width:0;transition:width .25s ease;}
+  .count{font-size:13px;color:var(--muted);margin-bottom:16px;}
+  .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap;}
+  .toolbar button{font:inherit;font-size:13px;padding:6px 12px;border:1px solid var(--line);
+    background:var(--card);color:var(--ink);border-radius:8px;cursor:pointer;}
+  .toolbar button:hover{border-color:var(--accent);}
+  section{background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:6px 16px 10px;margin-bottom:14px;}
+  h2{font-size:14px;font-weight:600;margin:14px 0 6px;display:flex;align-items:center;gap:8px;}
+  h2 .pill{font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;
+    background:var(--accent-bg);color:var(--accent);}
+  h2.sched .pill{background:var(--sched-bg);color:var(--sched);}
+  ul{list-style:none;margin:0;padding:0;}
+  li{display:flex;align-items:flex-start;gap:11px;padding:11px 2px;border-top:1px solid var(--line);
+    cursor:pointer;-webkit-tap-highlight-color:transparent;}
+  li:first-child{border-top:none;}
+  .box{flex:0 0 22px;width:22px;height:22px;border:2px solid var(--muted);border-radius:6px;
+    margin-top:1px;display:flex;align-items:center;justify-content:center;font-size:14px;color:#fff;transition:.15s;}
+  li.done .box{background:var(--accent);border-color:var(--accent);}
+  li.done .box::after{content:"\2713";}
+  .txt{flex:1;font-size:15px;}
+  li.done .txt{color:var(--done);text-decoration:line-through;}
+  .note{display:block;font-size:12px;color:var(--muted);margin-top:2px;text-decoration:none!important;}
+  .hide-done li.done{display:none;}
+  .empty{color:var(--muted);font-size:14px;padding:20px 2px;}
+  footer{color:var(--muted);font-size:12px;margin-top:18px;text-align:center;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="index.html">&larr; All lists</a>
+  <h1 id="title">To-do</h1>
+  <p class="sub" id="subtitle"></p>
+  <div class="status" id="status"><span class="dot"></span><span id="statusText">Loading&hellip;</span></div>
+  <div class="bar"><span id="fill"></span></div>
+  <p class="count" id="count"></p>
+  <div class="toolbar">
+    <button id="toggleHide">Hide completed</button>
+    <button id="refresh">Refresh</button>
+  </div>
+  <div id="list"></div>
+  <footer>Synced live with Supabase &middot; safe to open on any device</footer>
+</div>
+<script>
+const SUPA="https://tuxfqgdsjjczkdwkekfy.supabase.co";
+const KEY="sb_publishable_0WSFtp3KLg1wixOtSZlwVQ_dVF0Ychr";
+const REST=SUPA+"/rest/v1/todo_items";
+const H={apikey:KEY,Authorization:"Bearer "+KEY};
+const SCHEDS=["Scheduled / upcoming","Key dates"];
+const LIST=new URLSearchParams(location.search).get("list")||"";
+let items=[], busy=0;
+const $=id=>document.getElementById(id);
+function status(kind,msg){ const el=$("status"); el.className="status "+kind; $("statusText").textContent=msg; }
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+async function loadMeta(){
+  try{
+    const r=await fetch(SUPA+"/rest/v1/todo_lists?slug=eq."+encodeURIComponent(LIST)+"&select=title,subtitle",{headers:H,cache:"no-store"});
+    const rows=await r.json();
+    if(rows&&rows[0]){ document.title=rows[0].title; $("title").textContent=rows[0].title;
+      $("subtitle").textContent=(rows[0].subtitle||"")+" · tap a row to check it off"; }
+  }catch(e){}
+}
+async function load(){
+  if(!LIST){ status("err","No list specified. Go back to All lists."); return; }
+  try{
+    const r=await fetch(REST+"?list=eq."+encodeURIComponent(LIST)+"&select=*&order=position.asc",{headers:H,cache:"no-store"});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    items=await r.json();
+    if(!busy) status("ok","Synced");
+    render();
+  }catch(e){
+    status("err","Can't reach the list — "+e.message);
+  }
+}
+async function toggle(id){
+  const it=items.find(x=>x.id===id); if(!it) return;
+  const prev=it.done; it.done=!it.done; render();
+  busy++; status("saving","Saving…");
+  try{
+    const r=await fetch(REST+"?id=eq."+encodeURIComponent(id),{method:"PATCH",
+      headers:{...H,"Content-Type":"application/json","Prefer":"return=minimal"},
+      body:JSON.stringify({done:it.done})});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    busy--; if(!busy) status("ok","Saved");
+  }catch(e){ it.done=prev; render(); busy--; status("err","Couldn't save — "+e.message); }
+}
+function render(){
+  const list=$("list"); list.innerHTML="";
+  if(!items.length){ list.innerHTML='<p class="empty">No items yet.</p>';
+    $("count").textContent=""; $("fill").style.width="0"; return; }
+  const order=[]; const bySec={};
+  items.forEach(i=>{ if(!(i.section in bySec)){ bySec[i.section]=[]; order.push(i.section); } bySec[i.section].push(i); });
+  let done=0,total=0;
+  order.forEach(sec=>{
+    const rows=bySec[sec];
+    const el=document.createElement("section");
+    const open=rows.filter(i=>!i.done).length;
+    el.innerHTML='<h2 class="'+(SCHEDS.indexOf(sec)>=0?'sched':'')+'">'+esc(sec)+'<span class="pill">'+open+' open</span></h2>';
+    const ul=document.createElement("ul");
+    rows.forEach(i=>{
+      total++; if(i.done)done++;
+      const li=document.createElement("li");
+      li.className=i.done?"done":"";
+      li.innerHTML='<span class="box"></span><span class="txt">'+esc(i.title)+(i.note?'<span class="note">'+esc(i.note)+'</span>':'')+'</span>';
+      li.onclick=()=>toggle(i.id);
+      ul.appendChild(li);
+    });
+    el.appendChild(ul); list.appendChild(el);
+  });
+  $("fill").style.width=(total?Math.round(done/total*100):0)+"%";
+  $("count").textContent=done+" of "+total+" done";
+}
+const VKEY="view-hide-"+LIST;
+function getHide(){ try{ return localStorage.getItem(VKEY)==="1"; }catch(e){ return false; } }
+function setHide(h){ try{ localStorage.setItem(VKEY, h?"1":"0"); }catch(e){} }
+function applyHide(){ const h=getHide(); $("list").classList.toggle("hide-done", h);
+  $("toggleHide").textContent=h?"Show completed":"Hide completed"; }
+$("toggleHide").onclick=function(){ setHide(!getHide()); applyHide(); };
+$("refresh").onclick=load;
+applyHide();
+loadMeta();
+load();
+setInterval(load,12000);
+window.addEventListener("focus",load);
+</script>
+</body>
+</html>

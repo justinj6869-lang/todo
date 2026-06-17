@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-title" content="To-Do" />
+<meta name="theme-color" content="#1d9e75" />
+<title>Our To-Do Lists</title>
+<style>
+  :root{
+    --bg:#f7f6f2; --card:#ffffff; --ink:#23221f; --muted:#76746c; --line:#e7e5dd;
+    --accent:#1d9e75; --accent-bg:#e1f5ee; --tag-bg:#eceae2; --danger:#a32d2d;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#1b1b19; --card:#242421; --ink:#ecebe4; --muted:#a3a199; --line:#34332e;
+      --accent:#5dcaa5; --accent-bg:#0f3a2f; --tag-bg:#34332e; --danger:#f09595; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.5;padding:28px 16px;-webkit-text-size-adjust:100%;}
+  .wrap{max-width:640px;margin:0 auto;}
+  h1{font-size:24px;font-weight:600;margin:0 0 2px;}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 14px;}
+  .status{font-size:12px;margin:0 0 16px;display:flex;align-items:center;gap:7px;min-height:18px;}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--muted);flex:0 0 9px;}
+  .status.ok .dot{background:var(--accent);} .status.err{color:var(--danger);} .status.err .dot{background:var(--danger);}
+  a.card{display:block;text-decoration:none;color:inherit;background:var(--card);
+    border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin-bottom:12px;transition:.15s;}
+  a.card:hover{border-color:var(--accent);}
+  .row{display:flex;align-items:baseline;gap:10px;}
+  .title{font-size:17px;font-weight:600;flex:1;}
+  .tag{font-size:11px;font-weight:600;padding:2px 9px;border-radius:99px;background:var(--tag-bg);color:var(--muted);white-space:nowrap;}
+  .lsub{color:var(--muted);font-size:13px;margin:1px 0 12px;}
+  .bar{height:9px;background:var(--line);border-radius:99px;overflow:hidden;margin-bottom:6px;}
+  .bar>span{display:block;height:100%;background:var(--accent);width:0;}
+  .meta{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);}
+  .empty{color:var(--muted);font-size:14px;padding:20px 2px;}
+  footer{color:var(--muted);font-size:12px;margin-top:20px;text-align:center;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Our to-do lists</h1>
+  <p class="sub">Justin &amp; Sha &middot; tap a list to open it</p>
+  <div class="status" id="status"><span class="dot"></span><span id="statusText">Loading&hellip;</span></div>
+  <div id="lists"></div>
+  <footer>Synced live with Supabase &middot; new lists appear here automatically</footer>
+</div>
+<script>
+const SUPA="https://tuxfqgdsjjczkdwkekfy.supabase.co";
+const KEY="sb_publishable_0WSFtp3KLg1wixOtSZlwVQ_dVF0Ychr";
+const H={apikey:KEY,Authorization:"Bearer "+KEY};
+const $=id=>document.getElementById(id);
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+async function load(){
+  try{
+    const r=await fetch(SUPA+"/rest/v1/todo_list_progress?select=*&order=position.asc,created_at.asc",{headers:H,cache:"no-store"});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    const lists=await r.json();
+    $("status").className="status ok"; $("statusText").textContent="Synced";
+    const box=$("lists"); box.innerHTML="";
+    if(!lists.length){ box.innerHTML='<p class="empty">No lists yet.</p>'; return; }
+    lists.forEach(l=>{
+      const total=+l.total||0, done=+l.done||0, pct=total?Math.round(done/total*100):0;
+      const a=document.createElement("a");
+      a.className="card"; a.href="list.html?list="+encodeURIComponent(l.slug);
+      a.innerHTML='<div class="row"><span class="title">'+esc(l.title)+'</span>'+
+        (l.owner?'<span class="tag">'+esc(l.owner)+'</span>':'')+'</div>'+
+        (l.subtitle?'<div class="lsub">'+esc(l.subtitle)+'</div>':'<div style="height:8px"></div>')+
+        '<div class="bar"><span style="width:'+pct+'%"></span></div>'+
+        '<div class="meta"><span>'+done+' of '+total+' done</span><span>'+pct+'%</span></div>';
+      box.appendChild(a);
+    });
+  }catch(e){
+    $("status").className="status err"; $("statusText").textContent="Can't reach your lists — "+e.message;
+  }
+}
+load();
+window.addEventListener("focus",load);
+</script>
+</body>
+</html>
