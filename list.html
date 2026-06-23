@@ -55,6 +55,14 @@
   .note{display:block;font-size:12px;color:var(--muted);margin-top:2px;text-decoration:none!important;}
   .hide-done li.done{display:none;}
   .empty{color:var(--muted);font-size:14px;padding:20px 2px;}
+  .addbox{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;}
+  .addbox input{flex:1;min-width:150px;font:inherit;font-size:15px;padding:9px 12px;
+    border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);}
+  .addbox select{font:inherit;font-size:13px;padding:0 8px;border:1px solid var(--line);
+    border-radius:8px;background:var(--card);color:var(--ink);max-width:170px;}
+  .addbox button{font:inherit;font-size:14px;font-weight:600;padding:9px 16px;border:none;
+    border-radius:8px;background:var(--accent);color:#fff;cursor:pointer;}
+  .addbox input:focus,.addbox select:focus{outline:none;border-color:var(--accent);}
   footer{color:var(--muted);font-size:12px;margin-top:18px;text-align:center;}
 </style>
 </head>
@@ -70,6 +78,11 @@
     <button id="toggleHide">Hide completed</button>
     <button id="refresh">Refresh</button>
   </div>
+  <form class="addbox" id="addForm" autocomplete="off">
+    <input id="addText" type="text" placeholder="Add a to-do&hellip;" />
+    <select id="addSection" aria-label="Section"></select>
+    <button type="submit">Add</button>
+  </form>
   <div id="list"></div>
   <footer>Synced live with Supabase &middot; safe to open on any device</footer>
 </div>
@@ -118,6 +131,7 @@ async function toggle(id){
   }catch(e){ it.done=prev; render(); busy--; status("err","Couldn't save — "+e.message); }
 }
 function render(){
+  populateSections();
   const list=$("list"); list.innerHTML="";
   if(!items.length){ list.innerHTML='<p class="empty">No items yet.</p>';
     $("count").textContent=""; $("fill").style.width="0"; return; }
@@ -150,6 +164,40 @@ function applyHide(){ const h=getHide(); $("list").classList.toggle("hide-done",
   $("toggleHide").textContent=h?"Show completed":"Hide completed"; }
 $("toggleHide").onclick=function(){ setHide(!getHide()); applyHide(); };
 $("refresh").onclick=load;
+
+function sectionsInOrder(){
+  const seen=[]; items.forEach(i=>{ if(seen.indexOf(i.section)<0) seen.push(i.section); });
+  if(!seen.length) seen.push("Inbox");
+  return seen;
+}
+function populateSections(){
+  const sel=$("addSection"); if(!sel) return; const cur=sel.value;
+  const secs=sectionsInOrder();
+  sel.innerHTML=secs.map(s=>'<option value="'+esc(s)+'">'+esc(s)+'</option>').join("");
+  if(cur && secs.indexOf(cur)>=0) sel.value=cur;
+}
+async function addItem(title, section){
+  const t=(title||"").trim(); if(!t) return;
+  const secItems=items.filter(i=>i.section===section);
+  const maxIn=secItems.reduce((m,i)=>Math.max(m,i.position||0),0);
+  const maxAll=items.reduce((m,i)=>Math.max(m,i.position||0),0);
+  const pos=secItems.length?maxIn+1:(items.length?maxAll+10:10);
+  const row={id:crypto.randomUUID(),list:LIST,section:section,title:t,note:null,position:pos,done:false};
+  items.push(row); render(); $("addText").value=""; $("addText").focus();
+  busy++; status("saving","Adding…");
+  try{
+    const r=await fetch(REST,{method:"POST",
+      headers:{...H,"Content-Type":"application/json","Prefer":"return=minimal"},
+      body:JSON.stringify(row)});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    busy--; if(!busy) status("ok","Added"); load();
+  }catch(e){
+    items=items.filter(x=>x.id!==row.id); render();
+    busy--; status("err","Couldn't add — "+e.message);
+  }
+}
+$("addForm").addEventListener("submit",function(e){ e.preventDefault(); addItem($("addText").value,$("addSection").value); });
+
 applyHide();
 loadMeta();
 load();
