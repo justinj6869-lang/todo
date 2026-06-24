@@ -36,16 +36,23 @@
   .toolbar button{font:inherit;font-size:13px;padding:6px 12px;border:1px solid var(--line);
     background:var(--card);color:var(--ink);border-radius:8px;cursor:pointer;}
   .toolbar button:hover{border-color:var(--accent);}
+  .toolbar button:disabled{opacity:.45;cursor:default;}
   section{background:var(--card);border:1px solid var(--line);border-radius:12px;
     padding:6px 16px 10px;margin-bottom:14px;}
   h2{font-size:14px;font-weight:600;margin:14px 0 6px;display:flex;align-items:center;gap:8px;}
   h2 .pill{font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;
     background:var(--accent-bg);color:var(--accent);}
   h2.sched .pill{background:var(--sched-bg);color:var(--sched);}
+  h2.pri{color:var(--sched);} h2.pri .pill{background:var(--sched-bg);color:var(--sched);}
+  section.pri{border-color:var(--sched);}
   ul{list-style:none;margin:0;padding:0;}
-  li{display:flex;align-items:flex-start;gap:11px;padding:11px 2px;border-top:1px solid var(--line);
-    cursor:pointer;-webkit-tap-highlight-color:transparent;}
+  ul.drop-empty{min-height:38px;}
+  li{display:flex;align-items:flex-start;gap:10px;padding:11px 2px;border-top:1px solid var(--line);
+    cursor:pointer;-webkit-tap-highlight-color:transparent;background:var(--card);}
   li:first-child{border-top:none;}
+  .grip{flex:0 0 auto;color:var(--muted);font-size:15px;line-height:22px;cursor:grab;
+    touch-action:none;user-select:none;-webkit-user-select:none;margin-top:1px;padding:0 1px;}
+  .grip:active{cursor:grabbing;}
   .box{flex:0 0 22px;width:22px;height:22px;border:2px solid var(--muted);border-radius:6px;
     margin-top:1px;display:flex;align-items:center;justify-content:center;font-size:14px;color:#fff;transition:.15s;}
   li.done .box{background:var(--accent);border-color:var(--accent);}
@@ -55,6 +62,7 @@
   .note{display:block;font-size:12px;color:var(--muted);margin-top:2px;text-decoration:none!important;}
   .hide-done li.done{display:none;}
   .empty{color:var(--muted);font-size:14px;padding:20px 2px;}
+  .hint{color:var(--muted);font-size:13px;font-style:italic;padding:4px 2px;margin:0;}
   .addbox{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;}
   .addbox input{flex:1;min-width:150px;font:inherit;font-size:15px;padding:9px 12px;
     border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);}
@@ -63,6 +71,9 @@
   .addbox button{font:inherit;font-size:14px;font-weight:600;padding:9px 16px;border:none;
     border-radius:8px;background:var(--accent);color:#fff;cursor:pointer;}
   .addbox input:focus,.addbox select:focus{outline:none;border-color:var(--accent);}
+  .sortable-ghost{opacity:.35;}
+  .sortable-chosen{background:var(--accent-bg);}
+  .sortable-drag{opacity:.9;}
   footer{color:var(--muted);font-size:12px;margin-top:18px;text-align:center;}
 </style>
 </head>
@@ -75,6 +86,7 @@
   <div class="bar"><span id="fill"></span></div>
   <p class="count" id="count"></p>
   <div class="toolbar">
+    <button id="undo" disabled>Undo</button>
     <button id="toggleHide">Hide completed</button>
     <button id="refresh">Refresh</button>
   </div>
@@ -84,30 +96,36 @@
     <button type="submit">Add</button>
   </form>
   <div id="list"></div>
-  <footer>Synced live with Supabase &middot; safe to open on any device</footer>
+  <footer>Synced live with Supabase &middot; drag the &#9783; handle to reorder &middot; &#8984;Z to undo</footer>
 </div>
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
 <script>
 const SUPA="https://tuxfqgdsjjczkdwkekfy.supabase.co";
 const KEY="sb_publishable_0WSFtp3KLg1wixOtSZlwVQ_dVF0Ychr";
 const REST=SUPA+"/rest/v1/todo_items";
 const H={apikey:KEY,Authorization:"Bearer "+KEY};
 const SCHEDS=["Scheduled / upcoming","Key dates"];
+const PRIORITY="High priority";
 const LIST=new URLSearchParams(location.search).get("list")||"";
-let items=[], busy=0;
+let items=[], busy=0, dragging=false, sortables=[];
+const undoStack=[];
 const $=id=>document.getElementById(id);
 function status(kind,msg){ const el=$("status"); el.className="status "+kind; $("statusText").textContent=msg; }
 function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function setUndo(){ $("undo").disabled=undoStack.length===0; }
+function pushUndo(a){ undoStack.push(a); if(undoStack.length>40) undoStack.shift(); setUndo(); }
 
 async function loadMeta(){
   try{
     const r=await fetch(SUPA+"/rest/v1/todo_lists?slug=eq."+encodeURIComponent(LIST)+"&select=title,subtitle",{headers:H,cache:"no-store"});
     const rows=await r.json();
     if(rows&&rows[0]){ document.title=rows[0].title; $("title").textContent=rows[0].title;
-      $("subtitle").textContent=(rows[0].subtitle||"")+" · tap a row to check it off"; }
+      $("subtitle").textContent=(rows[0].subtitle||"")+" · tap to check off, drag &#9783; to reorder"; }
   }catch(e){}
 }
 async function load(){
   if(!LIST){ status("err","No list specified. Go back to All lists."); return; }
+  if(busy||dragging) return;
   try{
     const r=await fetch(REST+"?list=eq."+encodeURIComponent(LIST)+"&select=*&order=position.asc",{headers:H,cache:"no-store"});
     if(!r.ok) throw new Error("HTTP "+r.status);
@@ -118,64 +136,88 @@ async function load(){
     status("err","Can't reach the list — "+e.message);
   }
 }
-async function toggle(id){
-  const it=items.find(x=>x.id===id); if(!it) return;
-  const prev=it.done; it.done=!it.done; render();
-  busy++; status("saving","Saving…");
-  try{
-    const r=await fetch(REST+"?id=eq."+encodeURIComponent(id),{method:"PATCH",
-      headers:{...H,"Content-Type":"application/json","Prefer":"return=minimal"},
-      body:JSON.stringify({done:it.done})});
-    if(!r.ok) throw new Error("HTTP "+r.status);
-    busy--; if(!busy) status("ok","Saved");
-  }catch(e){ it.done=prev; render(); busy--; status("err","Couldn't save — "+e.message); }
+
+// --- ordering helpers ---
+function orderedSections(){            // for rendering: High priority pinned first, always present
+  const seen=[]; items.forEach(i=>{ if(seen.indexOf(i.section)<0) seen.push(i.section); });
+  const rest=seen.filter(s=>s!==PRIORITY);
+  return [PRIORITY, ...rest];
 }
+function addSectionOptions(){          // for the add dropdown: real sections first, priority last
+  const seen=[]; items.forEach(i=>{ if(seen.indexOf(i.section)<0) seen.push(i.section); });
+  let rest=seen.filter(s=>s!==PRIORITY);
+  if(!rest.length) rest=["Inbox"];
+  return [...rest, PRIORITY];
+}
+function populateSections(){
+  const sel=$("addSection"); if(!sel) return; const cur=sel.value;
+  const secs=addSectionOptions();
+  sel.innerHTML=secs.map(s=>'<option value="'+esc(s)+'">'+(s===PRIORITY?'⭐ '+esc(s):esc(s))+'</option>').join("");
+  if(cur && secs.indexOf(cur)>=0) sel.value=cur;
+}
+
+function destroySortables(){ sortables.forEach(s=>{try{s.destroy();}catch(e){}}); sortables=[]; }
+
 function render(){
   populateSections();
+  destroySortables();
   const list=$("list"); list.innerHTML="";
-  if(!items.length){ list.innerHTML='<p class="empty">No items yet.</p>';
-    $("count").textContent=""; $("fill").style.width="0"; return; }
-  const order=[]; const bySec={};
-  items.forEach(i=>{ if(!(i.section in bySec)){ bySec[i.section]=[]; order.push(i.section); } bySec[i.section].push(i); });
+  const bySec={}; items.forEach(i=>{ (bySec[i.section]=bySec[i.section]||[]).push(i); });
   let done=0,total=0;
-  order.forEach(sec=>{
-    const rows=bySec[sec];
+  orderedSections().forEach(sec=>{
+    const rows=bySec[sec]||[];
+    const isPri=sec===PRIORITY;
     const el=document.createElement("section");
+    if(isPri) el.className="pri";
     const open=rows.filter(i=>!i.done).length;
-    el.innerHTML='<h2 class="'+(SCHEDS.indexOf(sec)>=0?'sched':'')+'">'+esc(sec)+'<span class="pill">'+open+' open</span></h2>';
+    const label=isPri?'⭐ High priority':esc(sec);
+    el.innerHTML='<h2 class="'+(isPri?'pri':(SCHEDS.indexOf(sec)>=0?'sched':''))+'">'+label+'<span class="pill">'+open+' open</span></h2>';
     const ul=document.createElement("ul");
+    ul.dataset.section=sec;
+    if(!rows.length) ul.className="drop-empty";
     rows.forEach(i=>{
       total++; if(i.done)done++;
       const li=document.createElement("li");
       li.className=i.done?"done":"";
-      li.innerHTML='<span class="box"></span><span class="txt">'+esc(i.title)+(i.note?'<span class="note">'+esc(i.note)+'</span>':'')+'</span>';
-      li.onclick=()=>toggle(i.id);
+      li.dataset.id=i.id;
+      li.innerHTML='<span class="grip" aria-hidden="true">&#9783;</span><span class="box"></span>'
+        +'<span class="txt">'+esc(i.title)+(i.note?'<span class="note">'+esc(i.note)+'</span>':'')+'</span>';
+      li.addEventListener("click",function(ev){ if(ev.target.classList.contains("grip")) return; toggle(i.id); });
       ul.appendChild(li);
     });
-    el.appendChild(ul); list.appendChild(el);
+    el.appendChild(ul);
+    if(isPri && !rows.length){ const h=document.createElement("p"); h.className="hint"; h.textContent="Drag items here to prioritize"; el.appendChild(h); }
+    list.appendChild(el);
+    if(window.Sortable){
+      sortables.push(new Sortable(ul,{group:"todos",handle:".grip",animation:150,
+        fallbackOnBody:true,swapThreshold:0.65,
+        ghostClass:"sortable-ghost",chosenClass:"sortable-chosen",dragClass:"sortable-drag",
+        onStart:function(){dragging=true;},
+        onEnd:function(){dragging=false; handleDrop();}}));
+    }
   });
   $("fill").style.width=(total?Math.round(done/total*100):0)+"%";
   $("count").textContent=done+" of "+total+" done";
 }
-const VKEY="view-hide-"+LIST;
-function getHide(){ try{ return localStorage.getItem(VKEY)==="1"; }catch(e){ return false; } }
-function setHide(h){ try{ localStorage.setItem(VKEY, h?"1":"0"); }catch(e){} }
-function applyHide(){ const h=getHide(); $("list").classList.toggle("hide-done", h);
-  $("toggleHide").textContent=h?"Show completed":"Hide completed"; }
-$("toggleHide").onclick=function(){ setHide(!getHide()); applyHide(); };
-$("refresh").onclick=load;
 
-function sectionsInOrder(){
-  const seen=[]; items.forEach(i=>{ if(seen.indexOf(i.section)<0) seen.push(i.section); });
-  if(!seen.length) seen.push("Inbox");
-  return seen;
+async function persist(id,fields){
+  busy++; status("saving","Saving…");
+  try{
+    const r=await fetch(REST+"?id=eq."+encodeURIComponent(id),{method:"PATCH",
+      headers:{...H,"Content-Type":"application/json","Prefer":"return=minimal"},
+      body:JSON.stringify(fields)});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    busy--; if(!busy) status("ok","Saved");
+  }catch(e){ busy--; status("err","Couldn't save — "+e.message); }
 }
-function populateSections(){
-  const sel=$("addSection"); if(!sel) return; const cur=sel.value;
-  const secs=sectionsInOrder();
-  sel.innerHTML=secs.map(s=>'<option value="'+esc(s)+'">'+esc(s)+'</option>').join("");
-  if(cur && secs.indexOf(cur)>=0) sel.value=cur;
+
+async function toggle(id){
+  const it=items.find(x=>x.id===id); if(!it) return;
+  pushUndo({type:"toggle", id, prevDone:it.done});
+  it.done=!it.done; render();
+  await persist(id,{done:it.done});
 }
+
 async function addItem(title, section){
   const t=(title||"").trim(); if(!t) return;
   const secItems=items.filter(i=>i.section===section);
@@ -190,14 +232,61 @@ async function addItem(title, section){
       headers:{...H,"Content-Type":"application/json","Prefer":"return=minimal"},
       body:JSON.stringify(row)});
     if(!r.ok) throw new Error("HTTP "+r.status);
-    busy--; if(!busy) status("ok","Added"); load();
+    busy--; if(!busy) status("ok","Added");
   }catch(e){
     items=items.filter(x=>x.id!==row.id); render();
     busy--; status("err","Couldn't add — "+e.message);
   }
 }
-$("addForm").addEventListener("submit",function(e){ e.preventDefault(); addItem($("addText").value,$("addSection").value); });
 
+function handleDrop(){
+  const prev={}; items.forEach(i=>prev[i.id]={section:i.section,position:i.position});
+  const byId={}; items.forEach(i=>byId[i.id]=i);
+  let pos=0; const changed=[];
+  $("list").querySelectorAll("ul").forEach(ul=>{
+    const sec=ul.dataset.section;
+    ul.querySelectorAll("li").forEach(li=>{
+      pos+=10; const id=li.dataset.id; const it=byId[id]; if(!it) return;
+      if(it.section!==sec || it.position!==pos){ it.section=sec; it.position=pos; changed.push(id); }
+    });
+  });
+  if(!changed.length) return;
+  pushUndo({type:"move", changes:changed.map(id=>({id,section:prev[id].section,position:prev[id].position}))});
+  render();
+  changed.forEach(id=>persist(id,{section:byId[id].section,position:byId[id].position}));
+}
+
+async function undo(){
+  const a=undoStack.pop(); setUndo();
+  if(!a){ status("ok","Nothing to undo"); return; }
+  status("saving","Undoing…");
+  if(a.type==="toggle"){
+    const it=items.find(x=>x.id===a.id); if(it){ it.done=a.prevDone; render(); await persist(a.id,{done:a.prevDone}); }
+  }else if(a.type==="move"){
+    a.changes.forEach(c=>{ const it=items.find(x=>x.id===c.id); if(it){ it.section=c.section; it.position=c.position; } });
+    render();
+    for(const c of a.changes){ await persist(c.id,{section:c.section,position:c.position}); }
+  }
+  if(!busy) status("ok","Undone");
+}
+
+const VKEY="view-hide-"+LIST;
+function getHide(){ try{ return localStorage.getItem(VKEY)==="1"; }catch(e){ return false; } }
+function setHide(h){ try{ localStorage.setItem(VKEY, h?"1":"0"); }catch(e){} }
+function applyHide(){ const h=getHide(); $("list").classList.toggle("hide-done", h);
+  $("toggleHide").textContent=h?"Show completed":"Hide completed"; }
+
+$("toggleHide").onclick=function(){ setHide(!getHide()); applyHide(); };
+$("refresh").onclick=load;
+$("undo").onclick=undo;
+$("addForm").addEventListener("submit",function(e){ e.preventDefault(); addItem($("addText").value,$("addSection").value); });
+document.addEventListener("keydown",function(e){
+  if((e.metaKey||e.ctrlKey) && (e.key==="z"||e.key==="Z") && !e.shiftKey){
+    if(document.activeElement && document.activeElement.id==="addText") return;
+    e.preventDefault(); undo();
+  }
+});
+setUndo();
 applyHide();
 loadMeta();
 load();
