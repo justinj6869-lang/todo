@@ -48,18 +48,25 @@
   ul{list-style:none;margin:0;padding:0;}
   ul.drop-empty{min-height:38px;}
   li{display:flex;align-items:flex-start;gap:10px;padding:11px 2px;border-top:1px solid var(--line);
-    cursor:pointer;-webkit-tap-highlight-color:transparent;background:var(--card);}
+    cursor:default;-webkit-tap-highlight-color:transparent;background:var(--card);}
   li:first-child{border-top:none;}
   .grip{flex:0 0 auto;color:var(--muted);font-size:15px;line-height:22px;cursor:grab;
     touch-action:none;user-select:none;-webkit-user-select:none;margin-top:1px;padding:0 1px;}
   .grip:active{cursor:grabbing;}
-  .box{flex:0 0 22px;width:22px;height:22px;border:2px solid var(--muted);border-radius:6px;
+  .box{flex:0 0 22px;width:22px;height:22px;border:2px solid var(--muted);border-radius:6px;cursor:pointer;
     margin-top:1px;display:flex;align-items:center;justify-content:center;font-size:14px;color:#fff;transition:.15s;}
   li.done .box{background:var(--accent);border-color:var(--accent);}
   li.done .box::after{content:"\2713";}
   .txt{flex:1;font-size:15px;}
   li.done .txt{color:var(--done);text-decoration:line-through;}
-  .note{display:block;font-size:12px;color:var(--muted);margin-top:2px;text-decoration:none!important;}
+  .note{display:block;font-size:12px;color:var(--muted);margin-top:2px;text-decoration:none!important;cursor:text;}
+  .title-text{cursor:text;}
+  .title-text:hover,.note:hover{text-decoration:underline dotted!important;text-underline-offset:2px;}
+  .addnote{display:inline-block;font-size:11px;color:var(--muted);margin-top:3px;cursor:text;opacity:.65;}
+  .addnote:hover{color:var(--accent);opacity:1;}
+  .edit{display:block;width:100%;font:inherit;font-size:15px;padding:4px 7px;margin:1px 0;
+    border:1px solid var(--accent);border-radius:6px;background:var(--bg);color:var(--ink);}
+  .edit.note-edit{font-size:12px;}
   .hide-done li.done{display:none;}
   .empty{color:var(--muted);font-size:14px;padding:20px 2px;}
   .hint{color:var(--muted);font-size:13px;font-style:italic;padding:4px 2px;margin:0;}
@@ -107,7 +114,7 @@ const H={apikey:KEY,Authorization:"Bearer "+KEY};
 const SCHEDS=["Scheduled / upcoming","Key dates"];
 const PRIORITY="High priority";
 const LIST=new URLSearchParams(location.search).get("list")||"";
-let items=[], busy=0, dragging=false, sortables=[];
+let items=[], busy=0, dragging=false, editing=false, sortables=[], editingState=null;
 const undoStack=[];
 const $=id=>document.getElementById(id);
 function status(kind,msg){ const el=$("status"); el.className="status "+kind; $("statusText").textContent=msg; }
@@ -125,7 +132,7 @@ async function loadMeta(){
 }
 async function load(){
   if(!LIST){ status("err","No list specified. Go back to All lists."); return; }
-  if(busy||dragging) return;
+  if(busy||dragging||editing) return;
   try{
     const r=await fetch(REST+"?list=eq."+encodeURIComponent(LIST)+"&select=*&order=position.asc",{headers:H,cache:"no-store"});
     if(!r.ok) throw new Error("HTTP "+r.status);
@@ -180,9 +187,29 @@ function render(){
       const li=document.createElement("li");
       li.className=i.done?"done":"";
       li.dataset.id=i.id;
-      li.innerHTML='<span class="grip" aria-hidden="true">&#9783;</span><span class="box"></span>'
-        +'<span class="txt">'+esc(i.title)+(i.note?'<span class="note">'+esc(i.note)+'</span>':'')+'</span>';
-      li.addEventListener("click",function(ev){ if(ev.target.classList.contains("grip")) return; toggle(i.id); });
+      const ed=(editingState&&editingState.id===i.id)?editingState.field:null;
+      let inner='<span class="grip" aria-hidden="true">&#9783;</span><span class="box"></span><span class="txt">';
+      inner+=(ed==="title")
+        ? '<input class="edit" type="text" value="'+esc(i.title)+'" />'
+        : '<span class="title-text">'+esc(i.title)+'</span>';
+      if(ed==="note") inner+='<input class="edit note-edit" type="text" value="'+esc(i.note||"")+'" placeholder="Add a note&hellip;" />';
+      else if(i.note) inner+='<span class="note">'+esc(i.note)+'</span>';
+      else inner+='<span class="addnote">+ note</span>';
+      inner+='</span>';
+      li.innerHTML=inner;
+      li.querySelector(".box").addEventListener("click",function(ev){ ev.stopPropagation(); toggle(i.id); });
+      const tt=li.querySelector(".title-text"); if(tt) tt.addEventListener("click",e=>{e.stopPropagation(); openEdit(i.id,"title");});
+      const nt=li.querySelector(".note"); if(nt) nt.addEventListener("click",e=>{e.stopPropagation(); openEdit(i.id,"note");});
+      const an=li.querySelector(".addnote"); if(an) an.addEventListener("click",e=>{e.stopPropagation(); openEdit(i.id,"note");});
+      const inp=li.querySelector(".edit");
+      if(inp){
+        inp.addEventListener("click",e=>e.stopPropagation());
+        inp.addEventListener("keydown",function(e){
+          if(e.key==="Enter"){ e.preventDefault(); commitEdit(inp.value); }
+          else if(e.key==="Escape"){ e.preventDefault(); cancelEdit(); }
+        });
+        inp.addEventListener("blur",function(){ commitEdit(inp.value); });
+      }
       ul.appendChild(li);
     });
     el.appendChild(ul);
@@ -216,6 +243,27 @@ async function toggle(id){
   pushUndo({type:"toggle", id, prevDone:it.done});
   it.done=!it.done; render();
   await persist(id,{done:it.done});
+}
+
+function openEdit(id,field){
+  if(editingState) return;
+  editingState={id,field}; editing=true; render();
+  const inp=document.querySelector('li[data-id="'+CSS.escape(id)+'"] .edit');
+  if(inp){ inp.focus(); inp.select(); }
+}
+function cancelEdit(){ editingState=null; editing=false; render(); }
+async function commitEdit(value){
+  if(!editingState) return;
+  const {id,field}=editingState; const it=items.find(x=>x.id===id);
+  editingState=null; editing=false;
+  if(!it){ render(); return; }
+  let v=(value||"").trim();
+  if(field==="title" && !v){ render(); return; }   // never allow a blank title
+  if(field==="note" && v==="") v=null;
+  if(v===it[field] || (v===null && !it[field])){ render(); return; }  // unchanged
+  pushUndo({type:"edit", id, field, prev:it[field]});
+  it[field]=v; render();
+  await persist(id,{[field]:v});
 }
 
 async function addItem(title, section){
@@ -266,6 +314,8 @@ async function undo(){
     a.changes.forEach(c=>{ const it=items.find(x=>x.id===c.id); if(it){ it.section=c.section; it.position=c.position; } });
     render();
     for(const c of a.changes){ await persist(c.id,{section:c.section,position:c.position}); }
+  }else if(a.type==="edit"){
+    const it=items.find(x=>x.id===a.id); if(it){ it[a.field]=a.prev; render(); await persist(a.id,{[a.field]:a.prev}); }
   }
   if(!busy) status("ok","Undone");
 }
